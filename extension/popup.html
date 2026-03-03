@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NavisAI</title>
+
+  <style>
+    :root {
+      --primary: #7c3aed;   /* amethyst */
+      --secondary: #4f46e5; /* indigo */
+      --bg: #0f1220;
+      --panel: #171a2f;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+    }
+
+    body {
+      width: 360px;
+      min-height: 320px;
+      margin: 0;
+      padding: 16px;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top, #1b1f3b, var(--bg));
+      color: var(--text);
+      box-sizing: border-box;
+    }
+
+    /* Header */
+    .header {
+      text-align: center;
+      margin-bottom: 14px;
+    }
+
+    .header h2 {
+      margin: 0;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      background: linear-gradient(90deg, #a78bfa, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* Card */
+    .card {
+      background: rgba(255,255,255,0.04);
+      border-radius: 12px;
+      padding: 14px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    }
+
+    textarea {
+      width: 100%;
+      height: 90px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(0,0,0,0.3);
+      color: var(--text);
+      resize: vertical;
+      outline: none;
+      transition: border 0.25s, box-shadow 0.25s;
+    }
+
+    textarea::placeholder {
+      color: #9aa0c4;
+    }
+
+    textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(124,58,237,0.35);
+    }
+
+    /* Button */
+    button {
+      margin-top: 12px;
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: none;
+      font-size: 16px;
+      font-weight: 600;
+      color: white;
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    button::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(
+        120deg,
+        transparent,
+        rgba(255,255,255,0.25),
+        transparent
+      );
+      animation: shimmer 2.5s infinite;
+    }
+
+    @keyframes shimmer {
+      0% { left: -100%; }
+      50% { left: 100%; }
+      100% { left: 100%; }
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(124,58,237,0.4);
+    }
+
+    button:disabled {
+      background: #555;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    /* Status */
+    #status {
+      margin-top: 14px;
+      font-size: 13px;
+      color: #a5b4fc;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.4; }
+      100% { opacity: 1; }
+    }
+
+    /* Logs */
+    #log {
+      margin-top: 10px;
+      max-height: 120px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12.5px;
+      background: rgba(0,0,0,0.35);
+      border-radius: 8px;
+      padding: 8px;
+      color: #c7d2fe;
+      white-space: pre-wrap;
+    }
+
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <h2>NavisAI</h2>
+    <span>Autonomous Web Agent</span>
+  </div>
+
+  <div class="card">
+    <textarea
+      id="taskInput"
+      placeholder="e.g. Find internships on this page and list deadlines">
+    </textarea>
+
+    <button id="startBtn">Start Agent</button>
+
+    <div id="status">
+      <div class="pulse"></div>
+      Idle – waiting for task
+    </div>
+
+    <div id="log"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
