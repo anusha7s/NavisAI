@@ -1,72 +1,86 @@
-// popup.js - Updated for agent loop visualization
+// ... your existing code ...
 
-const startBtn = document.getElementById('startBtn');
-const taskInput = document.getElementById('taskInput');
-const statusDiv = document.getElementById('status');
-const logDiv = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const startBtn = document.getElementById('start');
+const stopBtn = document.getElementById('stop');
 
-let isRunning = false;
-
-// Listen for log updates from background.js
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.action === 'updateLog') {
-    appendToLog(message.log);
-  } else if (message.action === 'updateStatus') {
-    statusDiv.textContent = message.status;
-  } else if (message.action === 'agentFinished') {
-    statusDiv.textContent = message.status || 'Agent finished';
-    startBtn.disabled = false;
-    isRunning = false;
-  }
-});
-
-// Helper to append log lines and auto-scroll
-function appendToLog(text) {
-  const line = document.createElement('div');
-  line.textContent = text;
-  logDiv.appendChild(line);
-  logDiv.scrollTop = logDiv.scrollHeight; // Auto-scroll to bottom
+// Auto-detect theme
+if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+  document.documentElement.setAttribute('data-theme', 'light');
 }
 
-startBtn.addEventListener('click', async () => {
-  if (isRunning) return;
+function log(message, type = 'info') {
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  div.innerHTML = `<span class="log-time">[${time}]</span> ${message}`;
 
-  const task = taskInput.value.trim();
+  if (type === 'error') div.style.color = 'var(--error)';
+  if (type === 'success') div.style.color = 'var(--success)';
+
+  logsEl.appendChild(div);
+  logsEl.scrollTop = logsEl.scrollHeight;
+}
+
+function setLoading(isLoading) {
+  startBtn.disabled = isLoading;
+  startBtn.innerHTML = isLoading ? '<span class="loading"></span> Running...' : 'Start Agent';
+  statusEl.innerHTML = isLoading
+    ? '<span class="loading"></span> Agent is working...'
+    : '';
+  statusEl.className = isLoading ? '' : 'success';
+}
+
+// Start button
+document.getElementById('start').onclick = async () => {
+  const task = document.getElementById('task').value.trim();
   if (!task) {
-    statusDiv.textContent = 'Please enter a task.';
+    log("Please enter a task", "error");
     return;
   }
 
-  // Reset UI
-  logDiv.innerHTML = '';
-  statusDiv.textContent = 'Starting agent...';
-  startBtn.disabled = true;
-  isRunning = true;
+  setLoading(true);
+  log(`Starting task: ${task}`);
 
   try {
-    const response = await chrome.runtime.sendMessage({
-      action: 'startAgent',
-      task: task
+    // your existing fetch code...
+    const res = await fetch('http://127.0.0.1:8000/start_task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task })
     });
 
-    if (response?.error) {
-      statusDiv.textContent = 'Error: ' + response.error;
-      startBtn.disabled = false;
-      isRunning = false;
-      return;
-    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    statusDiv.textContent = 'Agent running... (see log below)';
-    // The background will now send updateLog messages
+    const data = await res.json();
+    log(`Initial plan received (confidence: ${data.plan?.confidence || '?'})`, "success");
+    chrome.runtime.sendMessage({ type: "START_AGENT", task, initialPlan: data.plan });
 
   } catch (err) {
-    statusDiv.textContent = 'Connection error: ' + err.message;
-    startBtn.disabled = false;
-    isRunning = false;
+    log(`Error: ${err.message}`, "error");
+    statusEl.textContent = "Failed – check logs";
+    statusEl.className = 'error';
+  } finally {
+    // keep loading until agent finishes or user stops
+    // you can setLoading(false) when you detect "done" in logs if you want
+  }
+};
+
+// Stop button
+document.getElementById('stop').onclick = () => {
+  chrome.runtime.sendMessage({ type: "STOP_AGENT" });
+  setLoading(false);
+  log("Agent stopped by user", "error");
+  statusEl.textContent = "Stopped";
+  statusEl.className = 'error';
+};
+
+// Optional: listen for messages from background to update status when done
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "AGENT_DONE") {
+    setLoading(false);
+    log("Task completed!", "success");
+    statusEl.textContent = "Task completed";
+    statusEl.className = 'success';
   }
 });
-
-// Optional: Clear log when popup opens (or keep history - your choice)
-// window.addEventListener('load', () => {
-//   logDiv.innerHTML = '';
-// });

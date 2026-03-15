@@ -1,70 +1,72 @@
-// content.js
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'getPageContext') {
-    const context = {
-      title: document.title,
-      url: window.location.href,
-      visibleText: document.body.innerText.slice(0, 8000), // limit size
-      // Add more later: forms, buttons, inputs
-      inputs: Array.from(document.querySelectorAll('input, textarea')).map(el => ({
-        placeholder: el.placeholder,
-        name: el.name,
-        type: el.type,
-        value: el.value
-      })),
-      buttons: Array.from(document.querySelectorAll('button, [role="button"]')).map(el => el.innerText.trim())
-    };
+// Helper to find element by text content
+function findElementByText(text) {
+  const elements = document.querySelectorAll('button, a, input, [role="button"]');
+  for (let el of elements) {
+    if (el.textContent.toLowerCase().includes(text.toLowerCase())) return el;
+  }
+  return null;
+}
 
-    sendResponse({ context: JSON.stringify(context, null, 2) });
+// Build a snapshot of the current page state
+function getObservation() {
+  return {
+    url: window.location.href,
+    title: document.title,
+    page_text: document.body.innerText.substring(0, 1500),
+    visible_buttons: Array.from(document.querySelectorAll('button, a'))
+      .map(b => b.textContent.trim())
+      .filter(Boolean)
+      .slice(0, 30),
+    forms: []
+  };
+}
+
+// Must return true from the listener to keep the channel open for sendResponse
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === "GET_OBSERVATION") {
+    sendResponse({ observation: getObservation() });
     return true;
   }
 
-  if (message.action === 'executeAction') {
-    const parts = message.command.split('|');
-    const command = parts[0];
-    let result = 'Executed';
+  if (msg.type === "EXECUTE_ACTION") {
+    const { action_type, target, value } = msg.action;
+    let result = "success";
 
     try {
-      if (command === 'TYPE') {
-  const text = parts[1];
-  let selector = parts[2];
-  let el = document.querySelector(selector);
+      if (action_type === "click") {
+        const el = findElementByText(target);
+        if (el) el.click();
+        else result = "element not found: " + target;
 
-  // Fallback: find best input if selector fails
-  if (!el) {
-    el = [...document.querySelectorAll('input[type="text"], input[type="search"], textarea')].find(e =>
-      (e.placeholder || '').toLowerCase().includes('search') ||
-      (e.name || '').toLowerCase().includes('q') ||
-      (e.id || '').toLowerCase().includes('search')
-    );
-  }
+      } else if (action_type === "type") {
+        // Try multiple selectors to find the input field
+        const el =
+          document.querySelector(`input[name="${target}"]`) ||
+          document.querySelector(`input[placeholder*="${target}" i]`) ||
+          document.querySelector('input[type="search"]') ||
+          document.querySelector('input[type="text"]') ||
+          findElementByText(target);
 
-  if (el) {
-    el.value = text;
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-} else if (command === 'CLICK') {
-  const selector = parts[1];
-  let el = document.querySelector(selector);
+        if (el) {
+          el.focus();
+          el.value = value || "";
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+          result = "input not found: " + target;
+        }
 
-  // Fallback: text-based search for button
-  if (!el) {
-    el = [...document.querySelectorAll('button, [role="button"], input[type="submit"]')].find(e =>
-      (e.innerText || e.value || '').toLowerCase().includes('search') ||
-      (e.innerText || e.value || '').toLowerCase().includes('find') ||
-      (e.innerText || e.value || '').toLowerCase().includes('go')
-    );
-  }
+      } else if (action_type === "navigate") {
+        window.location.href = target;
 
-  if (el) el.click();
-}
-      // Add NAVIGATE, SCROLL later
+      } else if (action_type === "done") {
+        result = "done";
+      }
     } catch (e) {
-      result = `Error: ${e.message}`;
+      result = "error: " + e.message;
     }
 
-    sendResponse({ result });
+    sendResponse({ status: result, observation: getObservation() });
     return true;
   }
 });
