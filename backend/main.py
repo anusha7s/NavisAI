@@ -1,136 +1,208 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, ValidationError
-import google.generativeai as genai
-from dotenv import load_dotenv
 import os
 import json
 import re
+import time
+from typing import Dict, Any
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+from pydantic import BaseModel
+
+from groq import Groq
+
+from models import TaskRequest, Observation, ActionPlan
 
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-app = FastAPI(title="NavisAI Backend - Autonomous Web Agent")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise RuntimeError("GROQ_API_KEY not found in .env file! Please add your Groq API key.")
 
-class PlanRequest(BaseModel):
-    task: str
-    page_context: str = ""
-    mode: str = "general"
-    previous_outcome: str = ""
+client = Groq(api_key=GROQ_API_KEY)
 
-class PlanResponse(BaseModel):
-    reasoning: str
-    next_action: str
-    confidence: int                 # 0-100
-    is_safe: bool
-    explanation: str
-    is_task_complete: bool = False
+# Powerful, fast, and high free-tier allowance
+MODEL_NAME = "llama-3.3-70b-versatile" 
 
-@app.post("/plan", response_model=PlanResponse)
-async def generate_plan(req: PlanRequest):
-    raw_text = None
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",  # Change to gemini-2.5-pro if you enable billing
-            generation_config=genai.types.GenerationConfig(
-                response_mime_type="application/json",
-                temperature=0.1,  # Low for format consistency
-                # top_p=0.95,     # Uncomment if needed
-                # max_output_tokens=800,
-            ),
-            safety_settings={
-                genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT: genai.types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                genai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH: genai.types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                genai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: genai.types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-                genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: genai.types.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            }
-        )
+def extract_json(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+    match = re.search(r"\{[\s\S]*\}", text, re.DOTALL)
+    if match:
+        return match.group(0)
+    return text
 
-        system_prompt = f"""
-You are NavisAI: a safe, explainable, autonomous web agent.
-STRICT RULES:
-- NEVER propose actions involving passwords, payments, credit cards, personal data submission, login attempts, or bypassing security.
-- If any action seems unsafe or restricted, set is_safe=false and explain why in explanation field.
-- Output **ONLY** valid JSON object. No extra text, no markdown, no code blocks like ```json, no comments.
-- Use **exactly** these keys and no others:
-  - "reasoning": Step-by-step thinking about the page and task (string)
-  - "next_action": SINGLE precise action in format e.g. "TYPE|text|selector", "CLICK|selector", "NAVIGATE|url", "SCROLL|down/up"
-  - "confidence": integer 0-100
-  - "is_safe": boolean true/false
-  - "explanation": full human-readable explanation including safety check (string)
-  - "is_task_complete": boolean – true ONLY if task is fully achieved based on current context
+app = FastAPI(title="NavisAI Backend")
 
-Example correct output:
-{{
-  "reasoning": "Page shows search bar filled. Next step is to submit.",
-  "next_action": "CLICK|button[type=\\\"submit\\\"], button:has-text(\\\"Search\\\")",
-  "confidence": 92,
-  "is_safe": true,
-  "explanation": "Safe click on public search button. No sensitive data involved.",
-  "is_task_complete": false
-}}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
-Mode: {req.mode}
-Task: {req.task}
-Current page context: {req.page_context[:4000]}  # truncated to avoid token limits
-Previous outcome (if any): {req.previous_outcome}
+SYSTEM_PROMPT = """
+You are NavisAI - an autonomous browser agent.
+Given a user task, decide the SINGLE next browser action to take.
 
-Respond with JSON only matching the above structure.
+You MUST respond with ONLY a valid JSON object, no other text, in EXACTLY this format:
+{
+  "action_type": "navigate",
+  "target": "https://www.google.com",
+  "value": null,
+  "confidence": 0.95,
+  "explanation": "Navigate to Google to search for the query"
+}
+
+Rules:
+- action_type must be EXACTLY one of: navigate, click, type, done
+- target: for navigate = full URL; for click = button/link text; for type = input field description/placeholder
+- value: text to type (only for action_type=type), otherwise null
+- confidence: a number between 0.0 and 1.0
+- explanation: short reason for this action
+- When the task is fully complete, use action_type = "done"
+- Do NOT include any text outside the JSON object
+- Do NOT use markdown, code blocks, explanations before/after JSON
 """
 
-        response = model.generate_content(system_prompt)
+@app.get("/health")
+async def health():
+    return {"status": "ok", "provider": "groq", "model": MODEL_NAME}
 
-        # Extract raw text safely
-        raw_text = (response.text or "").strip()
+@app.post("/start_task")
+async def start_task(req: TaskRequest):
+    full_prompt = f"""
+User Task: {req.task}
 
-        print("Raw Gemini output:", raw_text)
-        print("Response finish reason:", response.candidates[0].finish_reason if response.candidates else "No candidates")
-        print("Safety ratings:", response.candidates[0].safety_ratings if response.candidates else "None")
+Output **only** the JSON object for the FIRST action. No other text, no markdown.
+Example:
+{{
+  "action_type": "navigate",
+  "target": "https://www.google.com",
+  "value": null,
+  "confidence": 0.95,
+  "explanation": "Go to Google homepage"
+}}
+"""
 
-        # Clean common wrappers Gemini sometimes adds
-        raw_text = re.sub(r'^```json\s*|\s*```$', '', raw_text).strip()
-        raw_text = re.sub(r'^```|\s*```$', '', raw_text).strip()
+    for attempt in range(1, 4):
+        try:
+            print(f"[DEBUG attempt {attempt}] Task: {req.task}")
+            
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": full_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=300,
+                response_format={"type": "json_object"} # Groq supports Guaranteed JSON Mode!
+            )
 
-        if not raw_text or raw_text == "{}" or len(raw_text) < 20:
-            print("WARNING: Empty or too small response from Gemini")
-            fallback = {
-                "reasoning": "Gemini returned empty/invalid response – possible safety block, token limit, or generation failure.",
-                "next_action": "PAUSE|wait for user or retry",
-                "confidence": 0,
-                "is_safe": False,
-                "explanation": "Generation failed. Check API status, safety filters, or reduce context length.",
-                "is_task_complete": False
-            }
-            return PlanResponse(**fallback)
+            raw_text = response.choices[0].message.content.strip()
+            print("[DEBUG RAW GROQ RESPONSE START]")
+            print(raw_text)
+            print("[DEBUG RAW GROQ RESPONSE END]")
+            print("─" * 80)
 
-        data = json.loads(raw_text)
+            plan_dict = json.loads(raw_text)
 
-        # Defensive key normalization (in case of capitalization differences)
-        normalized = {
-            "reasoning": data.get("reasoning") or data.get("Reasoning") or "",
-            "next_action": data.get("next_action") or data.get("NextAction") or data.get("action") or "",
-            "confidence": data.get("confidence") or 50,
-            "is_safe": data.get("is_safe") if isinstance(data.get("is_safe"), bool) else True,
-            "explanation": data.get("explanation") or data.get("Explanation") or "No explanation provided",
-            "is_task_complete": data.get("is_task_complete", False),
-        }
+            if "action_type" not in plan_dict or plan_dict["action_type"] not in ["navigate", "click", "type", "done"]:
+                raise ValueError("Invalid or missing action_type")
 
-        return PlanResponse(**normalized)
+            return {"status": "planning", "plan": plan_dict}
 
-    except json.JSONDecodeError as jde:
-        print("JSON decode failed:", str(jde))
-        raise HTTPException(status_code=500, detail=f"Invalid JSON from Gemini\nRaw: {raw_text[:600]}...")
-    except ValidationError as ve:
-        print("Pydantic validation failed:", ve.errors())
-        raise HTTPException(status_code=422, detail=f"Invalid response structure\nErrors: {ve.errors()}\nRaw: {raw_text[:600]}...")
-    except Exception as e:
-        print("Unexpected error:", str(e))
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}\nRaw output was: {raw_text[:600]}...")
+        except Exception as e:
+            print(f"[GENERAL ERROR attempt {attempt}]: {str(e)}")
+            if attempt == 3:
+                raise HTTPException(500, detail=f"Groq API call failed: {str(e)}")
+            time.sleep(2)
 
+    raise HTTPException(500, "All attempts failed")
 
-@app.get("/models")
-async def list_models():
-    try:
-        models = genai.list_models()
-        return {"available_models": [m.name for m in models]}
-    except Exception as e:
-        return {"error": str(e)}
+@app.post("/next_step")
+async def next_step(obs: Observation):
+    page_summary = (
+        f"URL: {obs.url}\n"
+        f"Title: {obs.title}\n"
+        f"Page text snippet: {obs.page_text[:1200]}\n"
+        f"Visible buttons/links: {obs.visible_buttons[:15]}\n"
+        f"Forms: {obs.forms}"
+    )
+
+    full_prompt = f"""
+Current page state:
+{page_summary}
+
+Decide the SINGLE next action (or "done" if task is complete).
+
+Examples:
+{{
+  "action_type": "type",
+  "target": "search box",
+  "value": "GLA University Mathura",
+  "confidence": 0.88,
+  "explanation": "Enter search query"
+}}
+
+{{
+  "action_type": "click",
+  "target": "Google Search",
+  "value": null,
+  "confidence": 0.9,
+  "explanation": "Click the search button"
+}}
+
+Do not add markdown, explanations, code blocks or any text outside the JSON.
+"""
+
+    for attempt in range(1, 4):
+        try:
+            print(f"[NEXT_STEP attempt {attempt}] Page URL: {obs.url}")
+
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": full_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=400,
+                response_format={"type": "json_object"}
+            )
+
+            raw_text = response.choices[0].message.content.strip()
+            print("[NEXT_STEP DEBUG RAW RESPONSE START]")
+            print(raw_text)
+            print("[NEXT_STEP DEBUG RAW RESPONSE END]")
+            print("─" * 90)
+
+            action_dict = json.loads(raw_text)
+
+            if "action_type" not in action_dict:
+                raise ValueError("Missing 'action_type' in response")
+
+            valid_types = {"navigate", "click", "type", "done"}
+            if action_dict["action_type"] not in valid_types:
+                raise ValueError(f"Invalid action_type: {action_dict['action_type']}")
+
+            return ActionPlan(**action_dict)
+
+        except Exception as e:
+            print(f"[NEXT_STEP GENERAL ERROR attempt {attempt}]: {str(e)}")
+            if attempt == 3:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Groq call failed in next_step: {str(e)}"
+                )
+            time.sleep(2)
+
+    raise HTTPException(500, "next_step endpoint failed after all retries")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
