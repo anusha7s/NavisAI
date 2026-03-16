@@ -15,11 +15,11 @@ from models import TaskRequest, Observation, ActionPlan
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY not found in .env file! Please add your Groq API key.")
+GROQ = os.getenv("GROQ")
+if not GROQ:
+    raise RuntimeError("")
 
-client = Groq(api_key=GROQ_API_KEY)
+client = Groq(key=GROQ)
 
 # Powerful, fast, and high free-tier allowance
 MODEL_NAME = "llama-3.3-70b-versatile" 
