@@ -5,11 +5,12 @@ class TaskRequest(BaseModel):
     task: str
 
 class Observation(BaseModel):
+    task: str
     url: str
     title: str
     page_text: str
     visible_buttons: List[str]
-    forms: List[dict]
+    forms: List[str]
 
 class ActionPlan(BaseModel):
     action_type: str           # click, type, navigate, done

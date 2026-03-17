@@ -1,6 +1,7 @@
 // ... your existing code ...
 
 const statusEl = document.getElementById('status');
+const logsEl = document.getElementById('logs');
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
 
@@ -79,8 +80,10 @@ document.getElementById('stop').onclick = () => {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "AGENT_DONE") {
     setLoading(false);
-    log("Task completed!", "success");
+    log(msg.text || "Task completed!", "success");
     statusEl.textContent = "Task completed";
     statusEl.className = 'success';
+  } else if (msg.type === "AGENT_STEP") {
+    log(msg.text); // log intermediate steps without stopping the UI
   }
 });

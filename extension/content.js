@@ -9,15 +9,22 @@ function findElementByText(text) {
 
 // Build a snapshot of the current page state
 function getObservation() {
+  const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea'));
+  const forms = inputs.map(el => {
+    let desc = el.name || el.id || el.placeholder || el.getAttribute('aria-label') || "unnamed_input";
+    let type = el.tagName.toLowerCase() === 'textarea' ? 'textarea' : el.type;
+    return `${type}: ${desc}`;
+  }).slice(0, 15);
+
   return {
     url: window.location.href,
     title: document.title,
     page_text: document.body.innerText.substring(0, 1500),
     visible_buttons: Array.from(document.querySelectorAll('button, a'))
-      .map(b => b.textContent.trim())
+      .map(b => b.textContent.trim().substring(0, 40))
       .filter(Boolean)
       .slice(0, 30),
-    forms: []
+    forms: forms
   };
 }
 
@@ -40,10 +47,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       } else if (action_type === "type") {
         // Try multiple selectors to find the input field
+        // Google uses <textarea name="q"> or title="Search"
         const el =
-          document.querySelector(`input[name="${target}"]`) ||
-          document.querySelector(`input[placeholder*="${target}" i]`) ||
-          document.querySelector('input[type="search"]') ||
+          document.querySelector(`input[name="${target}" i], textarea[name="${target}" i]`) ||
+          document.querySelector(`[id*="${target}" i]`) ||
+          document.querySelector(`input[placeholder*="${target}" i], textarea[placeholder*="${target}" i]`) ||
+          document.querySelector(`[aria-label*="${target}" i], [title*="${target}" i]`) ||
+          document.querySelector('input[type="search"], textarea') ||
           document.querySelector('input[type="text"]') ||
           findElementByText(target);
 
@@ -52,6 +62,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           el.value = value || "";
           el.dispatchEvent(new Event("input", { bubbles: true }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
+          // Press Enter automatically to submit search if it's an input/textarea
+          if (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea') {
+              el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
+          }
         } else {
           result = "input not found: " + target;
         }

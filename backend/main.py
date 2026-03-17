@@ -15,11 +15,11 @@ from models import TaskRequest, Observation, ActionPlan
 
 load_dotenv()
 
-GROQ = os.getenv("GROQ")
-if not GROQ:
-    raise RuntimeError("")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise RuntimeError("GROQ_API_KEY not found in environment")
 
-client = Groq(key=GROQ)
+client = Groq(api_key=GROQ_API_KEY)
 
 # Powerful, fast, and high free-tier allowance
 MODEL_NAME = "llama-3.3-70b-versatile" 
@@ -135,6 +135,8 @@ async def next_step(obs: Observation):
     )
 
     full_prompt = f"""
+User Task: {obs.task}
+
 Current page state:
 {page_summary}
 
