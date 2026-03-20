@@ -30,6 +30,11 @@ function setLoading(isLoading) {
     ? '<span class="loading"></span> Agent is working...'
     : '';
   statusEl.className = isLoading ? '' : 'success';
+  if (isLoading) {
+    document.body.classList.add('is-running');
+  } else {
+    document.body.classList.remove('is-running');
+  }
 }
 
 // Start button
