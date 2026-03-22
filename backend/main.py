@@ -2,6 +2,7 @@ import os
 import json
 import re
 import time
+import asyncio
 from typing import Dict, Any
 
 from fastapi import FastAPI, HTTPException
@@ -9,9 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-from groq import Groq
+from groq import AsyncGroq
 
-from models import TaskRequest, Observation, ActionPlan
+from models import TaskRequest, Observation, ActionPlan, NextStepRequest
 
 load_dotenv()
 
@@ -19,7 +20,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY not found in environment")
 
-client = Groq(api_key=GROQ_API_KEY)
+client = AsyncGroq(api_key=GROQ_API_KEY)
 
 # Powerful, fast, and high free-tier allowance
 MODEL_NAME = "llama-3.3-70b-versatile" 
@@ -58,9 +59,9 @@ You MUST respond with ONLY a valid JSON object, no other text, in EXACTLY this f
 }
 
 Rules:
-- action_type must be EXACTLY one of: navigate, click, type, done
-- target: for navigate = full URL; for click = button/link text; for type = input field description/placeholder
-- value: text to type (only for action_type=type), otherwise null
+- action_type must be EXACTLY one of: navigate, click, type, submit, scroll, wait, select_option, press_key, done
+- target: for navigate = full URL; for all element interactions (click, type, submit, scroll, select_option) ALWAYS explicitly use the EXACT 'selector' from the observation if available, otherwise fallback to text/description; for scroll also "up"/"down"; for press_key = key name
+- value: text to type (for type), wait duration in ms (for wait), option text (for select_option), key name (for press_key)
 - confidence: a number between 0.0 and 1.0
 - explanation: short reason for this action
 - When the task is fully complete, use action_type = "done"
@@ -92,7 +93,7 @@ Example:
         try:
             print(f"[DEBUG attempt {attempt}] Task: {req.task}")
             
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -109,34 +110,46 @@ Example:
             print("[DEBUG RAW GROQ RESPONSE END]")
             print("─" * 80)
 
-            plan_dict = json.loads(raw_text)
+            try:
+                plan_dict = json.loads(raw_text)
+            except json.JSONDecodeError:
+                plan_dict = json.loads(extract_json(raw_text))
 
-            if "action_type" not in plan_dict or plan_dict["action_type"] not in ["navigate", "click", "type", "done"]:
-                raise ValueError("Invalid or missing action_type")
+            plan_obj = ActionPlan(**plan_dict)
 
-            return {"status": "planning", "plan": plan_dict}
+            if plan_obj.action_type not in ["navigate", "click", "type", "submit", "scroll", "wait", "select_option", "press_key", "done"]:
+                raise ValueError(f"Invalid action_type: {plan_obj.action_type}")
+
+            return {"status": "planning", "plan": plan_obj.model_dump()}
 
         except Exception as e:
             print(f"[GENERAL ERROR attempt {attempt}]: {str(e)}")
             if attempt == 3:
                 raise HTTPException(500, detail=f"Groq API call failed: {str(e)}")
-            time.sleep(2)
+            await asyncio.sleep(2)
 
     raise HTTPException(500, "All attempts failed")
 
 @app.post("/next_step")
-async def next_step(obs: Observation):
+async def next_step(req: NextStepRequest):
+    obs = req.observation
     page_summary = (
         f"URL: {obs.url}\n"
         f"Title: {obs.title}\n"
         f"Page text snippet: {obs.page_text[:1200]}\n"
-        f"Visible buttons/links: {obs.visible_buttons[:15]}\n"
-        f"Forms: {obs.forms}"
+        f"Buttons/Links: {json.dumps(obs.buttons[:15])}\n"
+        f"Inputs: {json.dumps(obs.inputs)}"
     )
 
-    full_prompt = f"""
-User Task: {obs.task}
+    action_context = ""
+    if req.last_action:
+        action_context += f"\nLast Action Attempted:\n{req.last_action.model_dump_json(indent=2)}\n"
+    if req.result:
+        action_context += f"\nAction Result:\n{req.result.model_dump_json(indent=2)}\n"
 
+    full_prompt = f"""
+User Task: {req.task}
+{action_context}
 Current page state:
 {page_summary}
 
@@ -164,9 +177,9 @@ Do not add markdown, explanations, code blocks or any text outside the JSON.
 
     for attempt in range(1, 4):
         try:
-            print(f"[NEXT_STEP attempt {attempt}] Page URL: {obs.url}")
+            print(f"[NEXT_STEP attempt {attempt}] Page URL: {req.observation.url}")
 
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -183,16 +196,18 @@ Do not add markdown, explanations, code blocks or any text outside the JSON.
             print("[NEXT_STEP DEBUG RAW RESPONSE END]")
             print("─" * 90)
 
-            action_dict = json.loads(raw_text)
+            try:
+                action_dict = json.loads(raw_text)
+            except json.JSONDecodeError:
+                action_dict = json.loads(extract_json(raw_text))
 
-            if "action_type" not in action_dict:
-                raise ValueError("Missing 'action_type' in response")
+            action_obj = ActionPlan(**action_dict)
 
-            valid_types = {"navigate", "click", "type", "done"}
-            if action_dict["action_type"] not in valid_types:
-                raise ValueError(f"Invalid action_type: {action_dict['action_type']}")
+            valid_types = {"navigate", "click", "type", "submit", "scroll", "wait", "select_option", "press_key", "done"}
+            if action_obj.action_type not in valid_types:
+                raise ValueError(f"Invalid action_type: {action_obj.action_type}")
 
-            return ActionPlan(**action_dict)
+            return action_obj
 
         except Exception as e:
             print(f"[NEXT_STEP GENERAL ERROR attempt {attempt}]: {str(e)}")
@@ -201,7 +216,7 @@ Do not add markdown, explanations, code blocks or any text outside the JSON.
                     status_code=500,
                     detail=f"Groq call failed in next_step: {str(e)}"
                 )
-            time.sleep(2)
+            await asyncio.sleep(2)
 
     raise HTTPException(500, "next_step endpoint failed after all retries")
 

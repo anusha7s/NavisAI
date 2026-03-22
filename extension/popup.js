@@ -4,6 +4,8 @@ const statusEl = document.getElementById('status');
 const logsEl = document.getElementById('logs');
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
+const errorEl = document.getElementById('error-message');
+const lastActionEl = document.getElementById('last-action');
 
 // Auto-detect theme
 if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
@@ -30,26 +32,24 @@ function setLoading(isLoading) {
     ? '<span class="loading"></span> Agent is working...'
     : '';
   statusEl.className = isLoading ? '' : 'success';
-  if (isLoading) {
-    document.body.classList.add('is-running');
-  } else {
-    document.body.classList.remove('is-running');
-  }
 }
 
 // Start button
 document.getElementById('start').onclick = async () => {
   const task = document.getElementById('task').value.trim();
   if (!task) {
-    log("Please enter a task", "error");
+    showError("Please enter a task");
     return;
   }
 
-  setLoading(true);
+  logsEl.innerHTML = '';
+  lastActionEl.style.display = 'none';
+  errorEl.style.display = 'none';
+  
+  setStatus("loading", "Initializing agent...");
   log(`Starting task: ${task}`);
 
   try {
-    // your existing fetch code...
     const res = await fetch('http://127.0.0.1:8000/start_task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -61,34 +61,30 @@ document.getElementById('start').onclick = async () => {
     const data = await res.json();
     log(`Initial plan received (confidence: ${data.plan?.confidence || '?'})`, "success");
     chrome.runtime.sendMessage({ type: "START_AGENT", task, initialPlan: data.plan });
-
+    
+    setStatus("running", "Waiting for page...");
   } catch (err) {
-    log(`Error: ${err.message}`, "error");
-    statusEl.textContent = "Failed – check logs";
-    statusEl.className = 'error';
-  } finally {
-    // keep loading until agent finishes or user stops
-    // you can setLoading(false) when you detect "done" in logs if you want
+    showError(err.message || "Failed to start");
   }
 };
 
 // Stop button
 document.getElementById('stop').onclick = () => {
   chrome.runtime.sendMessage({ type: "STOP_AGENT" });
-  setLoading(false);
+  setStatus("idle", "Agent stopped by user");
   log("Agent stopped by user", "error");
-  statusEl.textContent = "Stopped";
-  statusEl.className = 'error';
 };
 
-// Optional: listen for messages from background to update status when done
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "AGENT_DONE") {
-    setLoading(false);
     log(msg.text || "Task completed!", "success");
-    statusEl.textContent = "Task completed";
-    statusEl.className = 'success';
+    stopLoading();
+    statusEl.textContent = "Task completed!";
+  } else if (msg.type === "AGENT_ERROR") {
+    showError(msg.error || "Unknown error occurred!");
   } else if (msg.type === "AGENT_STEP") {
     log(msg.text); // log intermediate steps without stopping the UI
+    updateLastAction(msg.text);
+    setStatus("running", "Executing steps...");
   }
 });
