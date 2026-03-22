@@ -6,9 +6,7 @@ NavisAI is an AI-powered browser agent that can observe web pages, plan actions 
 
 It bridges:
 
-🧠 AI reasoning (LLM)
-🌐 Browser interaction (Chrome Extension)
-⚙️ Backend decision engine (FastAPI)
+🧠 AI reasoning (LLM)<br>🌐 Browser interaction (Chrome Extension)<br>⚙️ Backend decision engine (FastAPI)
 
 ⚙️ How It Works
 User Task → Backend (/start_task)
