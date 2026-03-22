@@ -26,7 +26,7 @@ User Task → Backend (/start_task)<br>
      ↓
 [LLM (Groq)]
 
-✨ Key Features
+✨ Key Features<br>
 🔹 AI-based task planning<br>
 🔹 Real-time page observation (DOM extraction)<br>
 🔹 Automated browser actions (click, type)<br>
@@ -42,11 +42,11 @@ User Task → Backend (/start_task)<br>
 6. Loop continues until "done"
 
 🛠 Tech Stack
-Frontend: HTML, CSS, JavaScript
-Extension: Chrome Extension (Manifest V3)
-Backend: FastAPI (Python)
-AI Model: Groq API
-Validation: Pydantic
+1. Frontend: HTML, CSS, JavaScript
+2. Extension: Chrome Extension (Manifest V3)
+3. Backend: FastAPI (Python)
+4. AI Model: Groq API
+5. Validation: Pydantic
 
 🚀 Getting Started
 1. Clone Repo
