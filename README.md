@@ -1,4 +1,5 @@
 🧠 NavisAI – Autonomous Browser Agent
+
 🌟 Overview
 
 NavisAI is an AI-powered browser agent that can observe web pages, plan actions using an LLM, and execute tasks automatically with minimal human intervention.
@@ -8,6 +9,7 @@ It bridges:
 🧠 AI reasoning (LLM)
 🌐 Browser interaction (Chrome Extension)
 ⚙️ Backend decision engine (FastAPI)
+
 ⚙️ How It Works
 User Task → Backend (/start_task)
           → Action → Browser (content.js)
