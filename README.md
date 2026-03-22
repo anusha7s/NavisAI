@@ -46,6 +46,7 @@ Extension: Chrome Extension (Manifest V3)
 Backend: FastAPI (Python)
 AI Model: Groq API
 Validation: Pydantic
+
 🚀 Getting Started
 1. Clone Repo
 git clone https://github.com/anusha7s/NavisAI.git
@@ -57,6 +58,7 @@ uvicorn main:app --reload
 Open chrome://extensions
 Enable Developer Mode
 Load extension/ folder
+
 📡 API
 /start_task
 
@@ -74,6 +76,7 @@ Limited actions (click, type only)
 Partial multi-step loop
 No retry/error handling
 No tests yet
+
 🚀 Future Improvements
 Full autonomous loop completion
 More actions (submit, scroll, wait)
@@ -89,8 +92,10 @@ Test coverage
 
 🎯 2. Agent Workflow Diagram
 
-![](image-1.png)
+<img width="414" height="1024" alt="image" src="https://github.com/user-attachments/assets/575ebf5d-87f6-42fd-94d9-5c9aa1aa7087" />
+
 
 🎯 3. Data Flow Diagram
 
-![alt text](image-2.png)
+<img width="377" height="1527" alt="image" src="https://github.com/user-attachments/assets/ddb80be4-7c16-46d8-9bb9-971478162f1e" />
+
