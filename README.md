@@ -9,11 +9,12 @@ It bridges:
 🧠 AI reasoning (LLM)<br>🌐 Browser interaction (Chrome Extension)<br>⚙️ Backend decision engine (FastAPI)
 
 ⚙️ How It Works
-User Task → Backend (/start_task)
-          → Action → Browser (content.js)
-          → Result + Observation
-          → Backend (/next_step)
-          → Repeat until DONE
+User Task → Backend (/start_task)<br>
+          → Action → Browser (content.js)<br>
+          → Result + Observation<br>
+          → Backend (/next_step)<br>
+          → Repeat until DONE<br>
+          
 🏗 Architecture
 [Popup UI]
      ↓
