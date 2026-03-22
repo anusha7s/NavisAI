@@ -25,12 +25,14 @@ User Task → Backend (/start_task)<br>
 [FastAPI Backend]
      ↓
 [LLM (Groq)]
+
 ✨ Key Features
 🔹 AI-based task planning
 🔹 Real-time page observation (DOM extraction)
 🔹 Automated browser actions (click, type)
 🔹 Iterative agent loop (plan → act → observe)
 🔹 Structured JSON action system
+
 🧠 Agent Workflow
 1. User enters task
 2. Backend generates action
@@ -82,7 +84,8 @@ Test coverage
 
 🎯 1. Architecture Diagram
 
-![alt text](image.png)
+<img width="1024" height="916" alt="image" src="https://github.com/user-attachments/assets/c49cf9ce-2361-4b76-a0f9-f1f3b99e0a98" />
+
 
 🎯 2. Agent Workflow Diagram
 
