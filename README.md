@@ -27,10 +27,10 @@ User Task → Backend (/start_task)<br>
 [LLM (Groq)]
 
 ✨ Key Features
-🔹 AI-based task planning
-🔹 Real-time page observation (DOM extraction)
-🔹 Automated browser actions (click, type)
-🔹 Iterative agent loop (plan → act → observe)
+🔹 AI-based task planning<br>
+🔹 Real-time page observation (DOM extraction)<br>
+🔹 Automated browser actions (click, type)<br>
+🔹 Iterative agent loop (plan → act → observe)<br>
 🔹 Structured JSON action system
 
 🧠 Agent Workflow
@@ -40,6 +40,7 @@ User Task → Backend (/start_task)<br>
 4. Result is captured
 5. Next action is generated
 6. Loop continues until "done"
+
 🛠 Tech Stack
 Frontend: HTML, CSS, JavaScript
 Extension: Chrome Extension (Manifest V3)
@@ -71,18 +72,19 @@ Generates next action based on:
 observation
 last action
 result
+
 ⚠️ Current Limitations
-Limited actions (click, type only)
-Partial multi-step loop
-No retry/error handling
-No tests yet
+1. Limited actions (click, type only)
+2. Partial multi-step loop
+3. No retry/error handling
+4. No tests yet
 
 🚀 Future Improvements
-Full autonomous loop completion
-More actions (submit, scroll, wait)
-Better UI state handling
-Retry + timeout system
-Test coverage
+1. Full autonomous loop completion
+2. More actions (submit, scroll, wait)
+3. Better UI state handling
+4. Retry + timeout system
+5. Test coverage
 
 
 🎯 1. Architecture Diagram
