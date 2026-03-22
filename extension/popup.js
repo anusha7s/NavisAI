@@ -25,13 +25,54 @@ function log(message, type = 'info') {
   logsEl.scrollTop = logsEl.scrollHeight;
 }
 
-function setLoading(isLoading) {
-  startBtn.disabled = isLoading;
-  startBtn.innerHTML = isLoading ? '<span class="loading"></span> Running...' : 'Start Agent';
-  statusEl.innerHTML = isLoading
-    ? '<span class="loading"></span> Agent is working...'
-    : '';
-  statusEl.className = isLoading ? '' : 'success';
+// States: "idle", "loading", "running", "done", "error"
+function setStatus(state, message = "") {
+  errorEl.style.display = 'none';
+  
+  if (state === "loading" || state === "running") {
+    startBtn.disabled = true;
+    startBtn.innerHTML = '<span class="loading"></span> ' + (state === "loading" ? 'Starting...' : 'Working...');
+    statusEl.innerHTML = '<span class="loading"></span> ' + (message || 'Agent is working...');
+    statusEl.className = 'info';
+    document.body.classList.add('is-running');
+  } 
+  else if (state === "done") {
+    startBtn.disabled = false;
+    startBtn.innerHTML = 'Start Agent';
+    statusEl.textContent = message || 'Task completed';
+    statusEl.className = 'success';
+    document.body.classList.remove('is-running');
+  }
+  else if (state === "error") {
+    startBtn.disabled = false;
+    startBtn.innerHTML = 'Start Agent';
+    statusEl.textContent = 'Failed';
+    statusEl.className = 'error';
+    document.body.classList.remove('is-running');
+  }
+  else { // idle
+    startBtn.disabled = false;
+    startBtn.innerHTML = 'Start Agent';
+    statusEl.textContent = message || '';
+    statusEl.className = '';
+    document.body.classList.remove('is-running');
+  }
+}
+
+function stopLoading() {
+  setStatus("done");
+}
+
+function showError(errText) {
+  errorEl.style.display = 'block';
+  errorEl.innerHTML = `<strong>Error:</strong> ${errText}`;
+  log(`Error: ${errText}`, 'error');
+  setStatus("error");
+}
+
+function updateLastAction(actionText) {
+  lastActionEl.style.display = 'block';
+  lastActionEl.innerHTML = `<span class="label">Action:</span> ${actionText}`;
 }
 
 // Start button

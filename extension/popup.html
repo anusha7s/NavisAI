@@ -162,6 +162,39 @@
       color: var(--text-secondary);
       font-weight: 500;
       min-height: 1.3em;
+      transition: color 0.3s ease;
+    }
+    
+    #status.success { color: var(--success); }
+    #status.error { color: var(--error); }
+    #status.info { color: #60a5fa; }
+
+    #last-action {
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      color: #bfdbfe;
+      font-size: 0.88rem;
+    }
+    #last-action .label {
+      font-weight: 600;
+      color: #93c5fd;
+      margin-right: 6px;
+    }
+    
+    #error-message {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      color: #fca5a5;
+      font-size: 0.88rem;
+    }
+    #error-message strong {
+      color: #f87171;
     }
 
     #logs {
