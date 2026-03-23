@@ -65,6 +65,7 @@ Rules:
 - confidence: a number between 0.0 and 1.0
 - explanation: short reason for this action
 - When the task is fully complete, use action_type = "done"
+- CRITICAL: If the user's task is simply to open or navigate to a website or perform a search, and you have already performed the necessary steps to reach that goal (like navigating to the correct URL), you MUST output action_type = "done". Do NOT take unnecessary further actions (like clicking links or typing) once the goal is reached.
 - Do NOT include any text outside the JSON object
 - Do NOT use markdown, code blocks, explanations before/after JSON
 """
@@ -170,6 +171,14 @@ Examples:
   "value": null,
   "confidence": 0.9,
   "explanation": "Click the search button"
+}}
+
+{{
+  "action_type": "done",
+  "target": null,
+  "value": null,
+  "confidence": 1.0,
+  "explanation": "The user merely asked to open the site, and the site is loaded."
 }}
 
 Do not add markdown, explanations, code blocks or any text outside the JSON.
