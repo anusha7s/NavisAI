@@ -52,7 +52,7 @@ function getObservation() {
       text: text || el.title || el.getAttribute('aria-label') || "",
       selector: getSelector(el)
     };
-  }).filter(Boolean).slice(0, 30);
+  }).filter(Boolean).slice(0, 50);
 
   return {
     url: window.location.href,

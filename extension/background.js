@@ -200,7 +200,10 @@ async function runAgentLoop(task, currentPlan, runId) {
               body: JSON.stringify(payload)
             });
             
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            if (!resp.ok) {
+              const errText = await resp.text();
+              throw new Error(`HTTP ${resp.status} - ${errText}`);
+            }
             nextAction = await resp.json(); // loop around and execute this!
         } catch (e) {
             chrome.runtime.sendMessage({type: "AGENT_ERROR", error: `Backend Error getting next step: ${e.message}`});

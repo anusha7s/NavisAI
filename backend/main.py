@@ -22,8 +22,8 @@ if not GROQ_API_KEY:
 
 client = AsyncGroq(api_key=GROQ_API_KEY)
 
-# Powerful, fast, and high free-tier allowance
-MODEL_NAME = "llama-3.3-70b-versatile" 
+# Model switched to 8B to avoid strict Groq rate limits (6000 TPM limit on 70B)
+MODEL_NAME = "llama-3.1-8b-instant" 
 
 def extract_json(text: str) -> str:
     text = text.strip()
@@ -60,7 +60,7 @@ You MUST respond with ONLY a valid JSON object, no other text, in EXACTLY this f
 
 Rules:
 - action_type must be EXACTLY one of: navigate, click, type, submit, scroll, wait, select_option, press_key, done
-- target: for navigate = full URL; for all element interactions (click, type, submit, scroll, select_option) ALWAYS explicitly use the EXACT 'selector' from the observation if available, otherwise fallback to text/description; for scroll also "up"/"down"; for press_key = key name
+- target: for navigate = full URL; for all element interactions (click, type, submit, scroll, select_option) prioritize explicitly using the exact 'text' from the observation (e.g. "Book tickets"). Only use 'selector' if text is unavailable; for scroll also "up"/"down"; for press_key = key name
 - value: text to type (for type), wait duration in ms (for wait), option text (for select_option), key name (for press_key)
 - confidence: a number between 0.0 and 1.0
 - explanation: short reason for this action
@@ -138,7 +138,7 @@ async def next_step(req: NextStepRequest):
         f"URL: {obs.url}\n"
         f"Title: {obs.title}\n"
         f"Page text snippet: {obs.page_text[:1200]}\n"
-        f"Buttons/Links: {json.dumps(obs.buttons[:15])}\n"
+        f"Buttons/Links: {json.dumps(obs.buttons[:50])}\n"
         f"Inputs: {json.dumps(obs.inputs)}"
     )
 
