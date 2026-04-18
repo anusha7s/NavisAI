@@ -30,8 +30,13 @@ class ActionResult(BaseModel):
     success: bool
     error: Optional[str] = None
 
+class ActionHistoryItem(BaseModel):
+    action: ActionPlan
+    result: ActionResult
+
 class NextStepRequest(BaseModel):
     task: str
     observation: PageObservation
     last_action: Optional[ActionPlan] = None
     result: Optional[ActionResult] = None
+    history: Optional[List[ActionHistoryItem]] = []

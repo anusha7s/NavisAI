@@ -3,25 +3,117 @@ import json
 import re
 import time
 import asyncio
-from typing import Dict, Any
+import sqlite3
+from typing import Dict, Any, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
-from groq import AsyncGroq
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
+
+from groq import AsyncGroq
 from models import TaskRequest, Observation, ActionPlan, NextStepRequest
 
 load_dotenv()
 
+# --- Security & Auth Configuration ---
+SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-for-jwt")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+# --- Database setup (SQL Injection Prevention) ---
+DB_NAME = "navisai.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            hashed_password TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def get_user_db(username: str):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, hashed_password FROM users WHERE username = ?", (username,))
+    user = cursor.fetchone()
+    conn.close()
+    if user:
+        return {"username": user[0], "hashed_password": user[1]}
+    return None
+
+def create_user_db(username: str, hashed_password: str):
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO users (username, hashed_password) VALUES (?, ?)", (username, hashed_password))
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+# Dependency to get current logged in user
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    user = get_user_db(username=username)
+    if user is None:
+        raise credentials_exception
+    return user
+
+# --- AI Setup ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY not found in environment")
 
 client = AsyncGroq(api_key=GROQ_API_KEY)
-
 # Model switched to 8B to avoid strict Groq rate limits (6000 TPM limit on 70B)
 MODEL_NAME = "llama-3.1-8b-instant" 
 
@@ -36,7 +128,12 @@ def extract_json(text: str) -> str:
         return match.group(0)
     return text
 
+# --- FastAPI with Rate Limiting (SlowAPI) ---
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="NavisAI Backend")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,18 +161,50 @@ Rules:
 - value: text to type (for type), wait duration in ms (for wait), option text (for select_option), key name (for press_key)
 - confidence: a number between 0.0 and 1.0
 - explanation: short reason for this action
-- When the task is fully complete, use action_type = "done"
-- CRITICAL: If the user's task is simply to open or navigate to a website or perform a search, and you have already performed the necessary steps to reach that goal (like navigating to the correct URL), you MUST output action_type = "done". Do NOT take unnecessary further actions (like clicking links or typing) once the goal is reached.
+- If the task is purely informational or just navigating to a site with NO further instructions, output action_type = "done" when reached. Otherwise, CONTINUE step-by-step until the complete user goal is achieved. Break down complex tasks into multiple sequential steps.
+- When the final goal of the user's task is fully achieved, output action_type = "done".
 - Do NOT include any text outside the JSON object
 - Do NOT use markdown, code blocks, explanations before/after JSON
 """
 
+# Auth Endpoints
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+@app.post("/register")
+@limiter.limit("5/minute")
+async def register(request: Request, user: UserCreate):
+    hashed_password = get_password_hash(user.password)
+    success = create_user_db(user.username, hashed_password)
+    if not success:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    return {"message": "User registered successfully"}
+
+@app.post("/token")
+@limiter.limit("5/minute")
+async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+    user = get_user_db(form_data.username)
+    if not user or not verify_password(form_data.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user["username"]}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
 @app.get("/health")
-async def health():
+@limiter.limit("60/minute")
+async def health(request: Request):
     return {"status": "ok", "provider": "groq", "model": MODEL_NAME}
 
 @app.post("/start_task")
-async def start_task(req: TaskRequest):
+@limiter.limit("10/minute")
+async def start_task(request: Request, req: TaskRequest): # (Optionally add `current_user: dict = Depends(get_current_user)` here)
     full_prompt = f"""
 User Task: {req.task}
 
@@ -132,7 +261,8 @@ Example:
     raise HTTPException(500, "All attempts failed")
 
 @app.post("/next_step")
-async def next_step(req: NextStepRequest):
+@limiter.limit("20/minute")
+async def next_step(request: Request, req: NextStepRequest):
     obs = req.observation
     page_summary = (
         f"URL: {obs.url}\n"
@@ -143,10 +273,14 @@ async def next_step(req: NextStepRequest):
     )
 
     action_context = ""
-    if req.last_action:
+    if req.history and len(req.history) > 0:
+        action_context += f"\nAction History ({len(req.history)} past steps):\n"
+        for i, item in enumerate(req.history):
+            action_context += f"Step {i+1}: Attempted {item.action.action_type} on '{item.action.target}'. Result: {'Success' if item.result.success else 'Failed (' + str(item.result.error) + ')'}\n"
+    elif req.last_action:
         action_context += f"\nLast Action Attempted:\n{req.last_action.model_dump_json(indent=2)}\n"
-    if req.result:
-        action_context += f"\nAction Result:\n{req.result.model_dump_json(indent=2)}\n"
+        if req.result:
+            action_context += f"Action Result:\n{req.result.model_dump_json(indent=2)}\n"
 
     full_prompt = f"""
 User Task: {req.task}

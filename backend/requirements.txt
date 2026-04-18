@@ -3,3 +3,8 @@ uvicorn[standard]
 google-genai
 pydantic
 python-dotenv
+groq
+slowapi
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart

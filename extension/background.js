@@ -68,6 +68,7 @@ async function waitForTabLoad(tabId) {
 async function runAgentLoop(task, currentPlan, runId) {
   let step = 0;
   let nextAction = currentPlan; // Start with the plan we got from the popup
+  let history = [];
   
   while (isRunning && runId === currentRunId) {
     try {
@@ -150,6 +151,11 @@ async function runAgentLoop(task, currentPlan, runId) {
         // 2. Log result to popup
         chrome.runtime.sendMessage({type: "AGENT_STEP", text: `[Step ${++step}] Executed: ${actionToExecute.action_type} → ${result.success ? 'success' : 'failed'}`});
         
+        history.push({
+            action: actionToExecute,
+            result: result
+        });
+        
         // Wait for the page to physically react (e.g. load new HTML, open menus, finish typing)
         await new Promise(r => setTimeout(r, 2000)); 
 
@@ -187,28 +193,47 @@ async function runAgentLoop(task, currentPlan, runId) {
         if (!obsResponse || !obsResponse.observation) throw new Error("Could not retrieve observation from page");
         
         // 4. Ask Backend (Groq) what to do next based on new state
-        try {
-            const payload = {
-              task: task,
-              observation: obsResponse.observation,
-              last_action: actionToExecute,
-              result: result
-            };
-            const resp = await fetch('http://127.0.0.1:8000/next_step', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify(payload)
-            });
-            
-            if (!resp.ok) {
-              const errText = await resp.text();
-              throw new Error(`HTTP ${resp.status} - ${errText}`);
+        let nextActionAttempt = 0;
+        let successNext = false;
+        while(nextActionAttempt < 3 && !successNext) {
+            try {
+                const payload = {
+                  task: task,
+                  observation: obsResponse.observation,
+                  last_action: actionToExecute,
+                  result: result,
+                  history: history
+                };
+                const resp = await fetch('http://127.0.0.1:8000/next_step', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify(payload)
+                });
+                
+                if (resp.status === 429) {
+                    console.warn("Rate limited by backend. Retrying...");
+                    chrome.runtime.sendMessage({type: "AGENT_STEP", text: "Rate limited. Waiting 5s..."});
+                    await new Promise(r => setTimeout(r, 5000));
+                    nextActionAttempt++;
+                    continue;
+                }
+                
+                if (!resp.ok) {
+                  const errText = await resp.text();
+                  throw new Error(`HTTP ${resp.status} - ${errText}`);
+                }
+                nextAction = await resp.json(); // loop around and execute this!
+                successNext = true;
+            } catch (e) {
+                console.error(`Backend Error getting next step: ${e.message}`);
+                nextActionAttempt++;
+                if (nextActionAttempt >= 3) {
+                    chrome.runtime.sendMessage({type: "AGENT_ERROR", error: `Backend Error getting next step: ${e.message}`});
+                    isRunning = false;
+                    break;
+                }
+                await new Promise(r => setTimeout(r, 2000));
             }
-            nextAction = await resp.json(); // loop around and execute this!
-        } catch (e) {
-            chrome.runtime.sendMessage({type: "AGENT_ERROR", error: `Backend Error getting next step: ${e.message}`});
-            isRunning = false;
-            break;
         }
     } catch (globalErr) {
         console.error("Agent Loop Error:", globalErr);
