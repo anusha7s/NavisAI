@@ -143,8 +143,8 @@ app.add_middleware(
 )
 
 SYSTEM_PROMPT = """
-You are NavisAI - an autonomous browser agent.
-Given a user task, decide the SINGLE next browser action to take.
+You are NavisAI - an autonomous browser agent with dynamic vision.
+Given a user task and the current screen observation, decide the SINGLE next browser action to take.
 
 You MUST respond with ONLY a valid JSON object, no other text, in EXACTLY this format:
 {
@@ -156,13 +156,23 @@ You MUST respond with ONLY a valid JSON object, no other text, in EXACTLY this f
 }
 
 Rules:
-- action_type must be EXACTLY one of: navigate, click, type, submit, scroll, wait, select_option, press_key, done
-- target: for navigate = full URL; for all element interactions (click, type, submit, scroll, select_option) prioritize explicitly using the exact 'text' from the observation (e.g. "Book tickets"). Only use 'selector' if text is unavailable; for scroll also "up"/"down"; for press_key = key name
-- value: text to type (for type), wait duration in ms (for wait), option text (for select_option), key name (for press_key)
+- action_type must be EXACTLY one of: navigate, click, type, submit, scroll, wait, select_option, press_key, ask_user, done
+- target: for navigate = full URL; for element interactions (click, type, submit, scroll) use the exact 'selector' from the CURRENT observation's 'buttons' or 'inputs' array. NEVER reuse selectors from your Action History — old selectors are dead!
+- value: the text to type (for type action ONLY), wait ms (for wait), option text (for select_option), key name (for press_key)
 - confidence: a number between 0.0 and 1.0
-- explanation: short reason for this action
-- If the task is purely informational or just navigating to a site with NO further instructions, output action_type = "done" when reached. Otherwise, CONTINUE step-by-step until the complete user goal is achieved. Break down complex tasks into multiple sequential steps.
-- When the final goal of the user's task is fully achieved, output action_type = "done".
+- explanation: THIS IS YOUR MEMORY SCRATCHPAD. Write down any data you find here. Example: "Amazon price for Ear Muffs is ₹1295. Now going to Flipkart."
+
+CRITICAL RULES:
+1. "type" action means typing into a search/input field. The "value" field is ONLY for the user's search query (e.g. "Ear Muffs for Noise Reduction"). NEVER type instructions or sentences into a search bar! Only type the actual product name!
+2. There is NO "read" action! Reading is automatic — you can already see all page data in the 'page_text' field. When you see prices in page_text, just write them in your 'explanation' and immediately output your NEXT real action (navigate to next site, or ask_user with your final answer).
+3. PRICE COMPARISON WORKFLOW:
+   Step A: Navigate to site 1 (e.g. amazon.in)
+   Step B: Type the product name into the search bar (the form auto-submits)
+   Step C: Search results are now visible in page_text. Note the prices in your explanation. Output action_type="navigate" to site 2.
+   Step D: Type the product name into site 2's search bar
+   Step E: Search results visible in page_text. Output action_type="ask_user" with your full price comparison in the explanation field.
+4. If your previous action failed, just look at the NEW observation and continue from the current page state.
+5. If you encounter a CAPTCHA or login wall, output ask_user to let the user handle it.
 - Do NOT include any text outside the JSON object
 - Do NOT use markdown, code blocks, explanations before/after JSON
 """
@@ -202,81 +212,72 @@ async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequ
 async def health(request: Request):
     return {"status": "ok", "provider": "groq", "model": MODEL_NAME}
 
-@app.post("/start_task")
-@limiter.limit("10/minute")
-async def start_task(request: Request, req: TaskRequest): # (Optionally add `current_user: dict = Depends(get_current_user)` here)
-    full_prompt = f"""
-User Task: {req.task}
+from fastapi.responses import StreamingResponse
+from sse_manager import sse_manager
+from agent import execute_task
 
-Output **only** the JSON object for the FIRST action. No other text, no markdown.
-Example:
-{{
-  "action_type": "navigate",
-  "target": "https://www.google.com",
-  "value": null,
-  "confidence": 0.95,
-  "explanation": "Go to Google homepage"
-}}
-"""
+@app.get("/step_result")
+async def step_result(task: str, step_id: str, success: str, error: str = ""):
+    from agent import active_tasks
+    if task in active_tasks and "event" in active_tasks[task]:
+        active_tasks[task]["result"] = {
+            "success": success.lower() == "true",
+            "error": error
+        }
+        active_tasks[task]["event"].set()
+    return {"status": "received"}
 
-    for attempt in range(1, 4):
-        try:
-            print(f"[DEBUG attempt {attempt}] Task: {req.task}")
-            
-            response = await client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": full_prompt}
-                ],
-                temperature=0.1,
-                max_tokens=300,
-                response_format={"type": "json_object"} # Groq supports Guaranteed JSON Mode!
-            )
+@app.post("/observation_result")
+async def observation_result(request: Request):
+    data = await request.json()
+    task = data.get("task")
+    from agent import active_tasks
+    if task in active_tasks and "event" in active_tasks[task]:
+        active_tasks[task]["result"] = {
+            "success": True,
+            "observation": data.get("observation")
+        }
+        active_tasks[task]["event"].set()
+    return {"status": "received"}
 
-            raw_text = response.choices[0].message.content.strip()
-            print("[DEBUG RAW GROQ RESPONSE START]")
-            print(raw_text)
-            print("[DEBUG RAW GROQ RESPONSE END]")
-            print("─" * 80)
+@app.post("/resume_task")
+async def resume_task(request: Request):
+    data = await request.json()
+    task = data.get("task")
+    user_reply = data.get("reply")
+    
+    from agent import execute_task, active_tasks
+    if task in active_tasks and "paused_at" in active_tasks[task]:
+        # Restart loop with a strong directive to execute the choice and not pause again
+        new_prompt = task + f"\n\nCRITICAL SYSTEM OVERRIDE: You previously paused and asked the user for input. The user replied with: '{user_reply}'. Your new plan MUST NOT include an 'ask_user' step. Immediately execute the exact choice the user specified."
+        asyncio.create_task(execute_task(new_prompt))
+        return {"status": "resuming"}
+    return {"status": "error", "message": "Task not found or not paused"}
 
-            try:
-                plan_dict = json.loads(raw_text)
-            except json.JSONDecodeError:
-                plan_dict = json.loads(extract_json(raw_text))
+@app.get("/stream_task")
+async def stream_task(request: Request, task: str):
+    queue = sse_manager.connect(task)
+    
+    # Start the agent execution in the background
+    asyncio.create_task(execute_task(task))
+    
+    return StreamingResponse(sse_manager.event_generator(task), media_type="text/event-stream")
 
-            plan_obj = ActionPlan(**plan_dict)
-
-            if plan_obj.action_type not in ["navigate", "click", "type", "submit", "scroll", "wait", "select_option", "press_key", "done"]:
-                raise ValueError(f"Invalid action_type: {plan_obj.action_type}")
-
-            return {"status": "planning", "plan": plan_obj.model_dump()}
-
-        except Exception as e:
-            print(f"[GENERAL ERROR attempt {attempt}]: {str(e)}")
-            if attempt == 3:
-                raise HTTPException(500, detail=f"Groq API call failed: {str(e)}")
-            await asyncio.sleep(2)
-
-    raise HTTPException(500, "All attempts failed")
-
-@app.post("/next_step")
-@limiter.limit("20/minute")
-async def next_step(request: Request, req: NextStepRequest):
+async def generate_next_step(req: NextStepRequest):
     obs = req.observation
     page_summary = (
         f"URL: {obs.url}\n"
         f"Title: {obs.title}\n"
-        f"Page text snippet: {obs.page_text[:1200]}\n"
-        f"Buttons/Links: {json.dumps(obs.buttons[:50])}\n"
-        f"Inputs: {json.dumps(obs.inputs)}"
+        f"Page text (READ THIS TO FIND PRICES):\n{obs.page_text[:6000]}\n\n"
+        f"Clickable Buttons/Links: {json.dumps(obs.buttons[:60])}\n"
+        f"Input Fields: {json.dumps(obs.inputs)}"
     )
 
     action_context = ""
     if req.history and len(req.history) > 0:
         action_context += f"\nAction History ({len(req.history)} past steps):\n"
         for i, item in enumerate(req.history):
-            action_context += f"Step {i+1}: Attempted {item.action.action_type} on '{item.action.target}'. Result: {'Success' if item.result.success else 'Failed (' + str(item.result.error) + ')'}\n"
+            action_context += f"Step {i+1}: {item.action.action_type} on '{item.action.target}'. Result: {'Success' if item.result.success else 'Failed'}. Memory: {item.action.explanation}\n"
     elif req.last_action:
         action_context += f"\nLast Action Attempted:\n{req.last_action.model_dump_json(indent=2)}\n"
         if req.result:
@@ -288,32 +289,11 @@ User Task: {req.task}
 Current page state:
 {page_summary}
 
-Decide the SINGLE next action (or "done" if task is complete).
-
-Examples:
-{{
-  "action_type": "type",
-  "target": "search box",
-  "value": "GLA University Mathura",
-  "confidence": 0.88,
-  "explanation": "Enter search query"
-}}
-
-{{
-  "action_type": "click",
-  "target": "Google Search",
-  "value": null,
-  "confidence": 0.9,
-  "explanation": "Click the search button"
-}}
-
-{{
-  "action_type": "done",
-  "target": null,
-  "value": null,
-  "confidence": 1.0,
-  "explanation": "The user merely asked to open the site, and the site is loaded."
-}}
+Decide the SINGLE next action. Remember:
+- To READ data, just look at the page text above. Do NOT type anything to read data.
+- "type" action is ONLY for typing a product name into a search bar. Never type instructions.
+- When you see prices in the page text, write them in your explanation and navigate to the next site.
+- When you have all prices, use ask_user to tell the user the comparison result.
 
 Do not add markdown, explanations, code blocks or any text outside the JSON.
 """
@@ -346,8 +326,12 @@ Do not add markdown, explanations, code blocks or any text outside the JSON.
 
             action_obj = ActionPlan(**action_dict)
 
-            valid_types = {"navigate", "click", "type", "submit", "scroll", "wait", "select_option", "press_key", "done"}
-            if action_obj.action_type not in valid_types:
+            valid_types = {"navigate", "click", "type", "submit", "scroll", "wait", "select_option", "press_key", "ask_user", "done"}
+            # If LLM outputs "read", treat it as a no-op — the data is already in the explanation
+            if action_obj.action_type == "read":
+                action_obj.action_type = "wait"
+                action_obj.value = "500"
+            elif action_obj.action_type not in valid_types:
                 raise ValueError(f"Invalid action_type: {action_obj.action_type}")
 
             return action_obj
@@ -355,13 +339,20 @@ Do not add markdown, explanations, code blocks or any text outside the JSON.
         except Exception as e:
             print(f"[NEXT_STEP GENERAL ERROR attempt {attempt}]: {str(e)}")
             if attempt == 3:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Groq call failed in next_step: {str(e)}"
-                )
+                raise Exception(f"Groq call failed in next_step: {str(e)}")
             await asyncio.sleep(2)
 
-    raise HTTPException(500, "next_step endpoint failed after all retries")
+    raise Exception("next_step logic failed after all retries")
+
+@app.post("/next_step")
+@limiter.limit("20/minute")
+async def next_step_endpoint(request: Request, req: NextStepRequest):
+    try:
+        return await generate_next_step(req)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 
 if __name__ == "__main__":
     import uvicorn

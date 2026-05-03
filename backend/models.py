@@ -20,11 +20,15 @@ class Observation(BaseModel):
     inputs: List[Dict[str, Any]]
 
 class ActionPlan(BaseModel):
-    action_type: str           # click, type, navigate, submit, scroll, wait, select_option, press_key, done
+    action_type: str           # click, type, navigate, submit, scroll, wait, select_option, press_key, ask_user, done
     target: Optional[str] = ""
-    value: Optional[str] = None
+    value: Optional[Any] = None
     confidence: float = 0.5
+    needs_user_input: bool = False
     explanation: str = ""
+
+class PlanResponse(BaseModel):
+    plan: List[ActionPlan]
 
 class ActionResult(BaseModel):
     success: bool
